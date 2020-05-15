@@ -10,9 +10,9 @@ fn main() {
     let file = File::open(file_name)
         .expect("Failed to open file");
 
-    let problem = Formula::parse_dimacs(file)
+    let formula = Formula::parse_dimacs(file)
         .unwrap_or_else(|msg| panic!("Couldn't parse file: {}", msg));
-    match problem.solve() {
+    match formula.solve() {
         Some(a) => println!("{}", a),
         None => println!("UNSATISFIABLE"),
     }

@@ -93,6 +93,10 @@ impl Formula {
         }
     }
 
+    fn simplify(&mut self) {
+        // Add formula simplifications here
+    }
+
     fn solved(&self, assignment: &Assignment) -> bool {
         'outer: for disjunction in &self.formula {
             for lit in disjunction {
@@ -118,10 +122,11 @@ impl Formula {
     }
 
     /// Solves the formula and returns an Assignment or None if it isn't possible
-    pub fn solve(&self) -> Option<Assignment> {
+    pub fn solve(mut self) -> Option<Assignment> {
         let mut assignment = Assignment::new(self.num_vars);
 
-        fn dpll(formula: &Formula, assignment: &mut Assignment) -> bool {
+        fn dpll(formula: &mut Formula, assignment: &mut Assignment) -> bool {
+            formula.simplify();
             if formula.solved(&assignment) {
                 true
             } else if formula.unsolvable(&assignment) {
@@ -144,7 +149,7 @@ impl Formula {
             }
         }
 
-        if dpll(self, &mut assignment) {
+        if dpll(&mut self, &mut assignment) {
             Some(assignment)
         } else {
             None
