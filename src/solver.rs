@@ -48,14 +48,10 @@ impl Formula {
         let buf = &buf.into_inner()[pos..];
         let mut clause_str_iter = buf.trim_end().split(" 0");
 
-        'outer: for (clause, clause_str) in formula.clauses.iter_mut().zip(&mut clause_str_iter) {
+        for (clause, clause_str) in formula.clauses.iter_mut().zip(&mut clause_str_iter) {
             for v in clause_str.split_whitespace() {
                 let v: isize = v.parse().map_err(|_| format!("Illegal variable '{}'", v))?;
                 let lit = Literal::from_var(v);
-                // Check if we have a | !a, which we rely upon not existing in the solver
-                if clause.0.contains(&!lit) {
-                    continue 'outer;
-                }
                 clause.0.push(lit);
             }
         }
