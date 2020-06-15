@@ -142,7 +142,7 @@ struct Literal {
 
 impl Literal {
     // Creates a literal from a variable. A variable is e.g. 3 or -42,
-    // which would respectively have ids of 2 and 41
+    // which would have ids of 2 and 41 respectively
     fn from_var(var: isize) -> Self {
         Literal {
             id: var.abs() as usize - 1,
