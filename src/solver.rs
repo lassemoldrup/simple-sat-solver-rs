@@ -3,7 +3,7 @@ use std::fmt;
 use std::ops::Not;
 use std::io::{Read, Cursor, BufRead};
 
-/// A Formula is a set of clauses and
+/// A set of clauses
 pub struct Formula {
     clauses: Vec<Clause>,
     assignment: Assignment,
@@ -46,9 +46,9 @@ impl Formula {
 
         let pos = buf.position() as usize;
         let buf = &buf.into_inner()[pos..];
-        let mut clause_iter = buf.trim_end().split(" 0");
+        let mut clause_str_iter = buf.trim_end().split(" 0");
 
-        'outer: for (clause, clause_str) in formula.clauses.iter_mut().zip(&mut clause_iter) {
+        'outer: for (clause, clause_str) in formula.clauses.iter_mut().zip(&mut clause_str_iter) {
             for v in clause_str.split_whitespace() {
                 let v: isize = v.parse().map_err(|_| format!("Illegal variable '{}'", v))?;
                 let lit = Literal::from_var(v);
@@ -60,7 +60,7 @@ impl Formula {
             }
         }
 
-        match clause_iter.next() {
+        match clause_str_iter.next() {
             Some("") => Ok(formula),
             None => Err("Not enough clauses".to_owned()),
             _ => Err("Too many clauses".to_owned()),
