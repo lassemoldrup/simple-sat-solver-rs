@@ -98,8 +98,7 @@ impl Formula {
             None
         }
     }
-
-    /// The DPLL algorithm. Simplification happens on assignment
+    
     fn dpll(&mut self) -> bool {
         !self.unsolvable() && (self.solved() || {
             let next = self.next_un_assigned();
