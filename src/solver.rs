@@ -98,7 +98,7 @@ impl Formula {
             None
         }
     }
-    
+
     fn dpll(&mut self) -> bool {
         !self.unsolvable() && (self.solved() || {
             let next = self.next_un_assigned();
@@ -141,6 +141,8 @@ struct Literal {
 }
 
 impl Literal {
+    // Creates a literal from a variable. A variable is e.g. 3 or -42,
+    // which would respectively have ids of 2 and 41
     fn from_var(var: isize) -> Self {
         Literal {
             id: var.abs() as usize - 1,
