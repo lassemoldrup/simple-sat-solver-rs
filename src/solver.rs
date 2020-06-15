@@ -1,19 +1,154 @@
 use std::fs::File;
 use std::fmt;
-use std::io::{BufReader, BufRead};
 use std::ops::Not;
+use std::io::{Read, Cursor, BufRead};
 
-/// A literal consisting of a variable id and whether that variable is negated
-#[derive(Copy, Clone)]
+/// A Formula is a set of clauses and
+pub struct Formula {
+    clauses: Vec<Clause>,
+    assignment: Assignment,
+    next_literal_id: usize,
+}
+
+impl Formula {
+    /// Parses a DIMACS file and returns the corresponding formula or an error
+    pub fn parse_dimacs(mut file: File) -> Result<Formula, String> {
+        let mut buf = String::new();
+        file.read_to_string(&mut buf).map_err(|_| "Error while reading file")?;
+        let mut buf = Cursor::new(buf);
+
+        // Parse comments and problem line
+        let problem_line: String = (&mut buf).lines()
+            .map(Result::unwrap)
+            .find(|l| !l.starts_with('c'))
+            .ok_or("Missing problem line")?;
+
+        let num_vars: usize;
+        let num_clauses: usize;
+        let params: Vec<_> = problem_line.split_whitespace().collect();
+        if params.len() != 4 || params[0] != "p" {
+            return Err("Invalid/Missing problem line".to_owned());
+        } else if params[1] != "cnf" {
+            return Err("Only cnf-formatted inputs are currently supported".to_owned());
+        } else {
+            num_vars = params[2].parse()
+                .map_err(|_| "Third problem line parameter invalid".to_owned())?;
+            num_clauses = params[3].parse()
+                .map_err(|_| "Fourth problem line parameter invalid".to_owned())?;
+        }
+
+        // Parse the variables
+        let mut formula = Formula {
+            clauses: vec![Clause::new(); num_clauses],
+            assignment: Assignment::new(num_vars),
+            next_literal_id: 0,
+        };
+
+        let pos = buf.position() as usize;
+        let buf = &buf.into_inner()[pos..];
+        let mut clause_iter = buf.trim_end().split(" 0");
+
+        'outer: for (clause, clause_str) in formula.clauses.iter_mut().zip(&mut clause_iter) {
+            for v in clause_str.split_whitespace() {
+                let v: isize = v.parse().map_err(|_| format!("Illegal variable '{}'", v))?;
+                let lit = Literal::from_var(v);
+                // Check if we have a | !a, which we rely upon not existing in the solver
+                if clause.0.contains(&!lit) {
+                    continue 'outer;
+                }
+                clause.0.push(lit);
+            }
+        }
+
+        match clause_iter.next() {
+            Some("") => Ok(formula),
+            None => Err("Not enough clauses".to_owned()),
+            _ => Err("Too many clauses".to_owned()),
+        }
+    }
+
+    fn solved(&self) -> bool {
+        self.clauses.iter().all(|c| c.solved(&self.assignment))
+    }
+
+    fn unsolvable(&self) -> bool {
+        self.clauses.iter().any(|c| c.unsolvable(&self.assignment))
+    }
+
+    fn next_un_assigned(&self) -> Literal {
+        let id = (self.next_literal_id..)
+            .find(|&i| self.assignment.0[i].is_none()).unwrap();
+        Literal {
+            id,
+            negated: false,
+        }
+    }
+
+    fn assign(&mut self, lit: Literal) {
+        self.next_literal_id = lit.id + 1;
+        self.assignment.assign(lit);
+    }
+
+    fn un_assign(&mut self, lit: Literal) {
+        self.next_literal_id = lit.id;
+        self.assignment.un_assign(lit);
+    }
+
+    /// Solves the formula and returns an Assignment or None if it isn't possible
+    pub fn solve(mut self) -> Option<Assignment> {
+        if self.dpll() {
+            Some(self.assignment)
+        } else {
+            None
+        }
+    }
+
+    /// The DPLL algorithm. Simplification happens on assignment
+    fn dpll(&mut self) -> bool {
+        !self.unsolvable() && (self.solved() || {
+            let next = self.next_un_assigned();
+            self.assign(next);
+            self.dpll() || {
+                self.un_assign(next);
+                self.assign(!next);
+                let res = self.dpll();
+                if !res { self.un_assign(!next) }
+                res
+            }
+        })
+    }
+}
+
+/// A disjunction of literals
+#[derive(Clone)]
+struct Clause(Vec<Literal>);
+
+impl Clause {
+    fn new() -> Self {
+        Clause(vec![])
+    }
+
+    fn solved(&self, assignment: &Assignment) -> bool {
+        self.0.iter().any(|l| assignment.assigned(*l))
+    }
+
+    fn unsolvable(&self, assignment: &Assignment) -> bool {
+        self.0.iter().all(|l| assignment.assigned(!*l))
+    }
+}
+
+/// A propositional variable (p, q, etc.) with some id which may be negated
+/// Ex.: p, !q
+#[derive(Copy, Clone, PartialEq)]
 struct Literal {
-    var_id: usize,
+    id: usize,
     negated: bool,
 }
 
 impl Literal {
-    fn new(var: i32) -> Self {
+    fn from_var(var: isize) -> Self {
         Literal {
-            var_id: var.abs() as usize,
+            id: var.abs() as usize - 1,
             negated: var < 0,
         }
     }
@@ -24,184 +159,41 @@ impl Not for Literal {
 
     fn not(self) -> Self::Output {
         Literal {
-            var_id: self.var_id,
+            id: self.id,
             negated: !self.negated,
         }
     }
 }
 
-type ParseResult = std::result::Result<Formula, String>;
-
-/// A Formula is a set of disjunctions (which are sets of literals)
-pub struct Formula {
-    formula: Vec<Vec<Literal>>,
-    num_vars: usize,
-}
-
-impl Formula {
-    /// Parses a DIMACS file and returns the corresponding formula or an error
-    pub fn parse_dimacs(file: File) -> ParseResult {
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-
-        // Parse comments and problem line
-        let mut num_vars: usize = 0;
-        let mut num_clauses: usize = 0;
-        for line in (&mut lines).map(|l| l.unwrap()) {
-            // Skip comments
-            if line.starts_with('c') { continue; }
-            // Handle problem line
-            else if line.starts_with('p') {
-                let args: Vec<_> = line.split_whitespace().skip(1).collect();
-                if args.len() != 3 || args[0] != "cnf" {
-                    return Err("Illegal problem line".to_owned());
-                }
-                num_vars = args[1].parse()
-                    .map_err(|_| "2nd argument in problem line not valid".to_owned())?;
-                num_clauses = args[2].parse()
-                    .map_err(|_| "3rd argument in problem line not valid".to_owned())?;
-                break;
-            } else {
-                return Err("Illegal problem line".to_owned());
-            }
-        }
-        if num_vars == 0 || num_clauses == 0 {
-            return Err("Illegal problem line".to_owned())
-        }
-
-        // Parse the variables
-        let mut formula = Formula {
-            formula: vec![Vec::new(); num_clauses],
-            num_vars,
-        };
-        let vars: String = lines.map(|l| l.unwrap() + " ").collect();
-        let mut clause = 0;
-        for var in vars.split_whitespace().map(|v| v.parse::<i32>()) {
-            let var = var.map_err(|e| format!("Illegal variable: {}", e))?;
-            if var == 0 {
-                clause += 1;
-            } else {
-                formula.formula.get_mut(clause).ok_or("Too many clauses")?
-                    .push(Literal::new(var));
-            }
-        }
-
-        if clause != num_clauses {
-            Err("Too few clauses".to_owned())
-        } else {
-            Ok(formula)
-        }
-    }
-
-    fn simplify(&mut self) {
-        // Add formula simplifications here
-    }
-
-    fn solved(&self, assignment: &Assignment) -> bool {
-        'outer: for disjunction in &self.formula {
-            for lit in disjunction {
-                if assignment.is_assigned(*lit) {
-                    continue 'outer;
-                }
-            }
-            return false;
-        }
-        true
-    }
-
-    fn unsolvable(&self, assignment: &Assignment) -> bool {
-        'outer: for disjunction in &self.formula {
-            for lit in disjunction {
-                if assignment.is_not_negated(*lit) {
-                    continue 'outer;
-                }
-            }
-            return true;
-        }
-        false
-    }
-
-    /// Solves the formula and returns an Assignment or None if it isn't possible
-    pub fn solve(mut self) -> Option<Assignment> {
-        let mut assignment = Assignment::new(self.num_vars);
-
-        fn dpll(formula: &mut Formula, assignment: &mut Assignment) -> bool {
-            formula.simplify();
-            if formula.solved(&assignment) {
-                true
-            } else if formula.unsolvable(&assignment) {
-                false
-            } else {
-                let next = assignment.next_literal();
-                assignment.assign(next);
-                if dpll(formula, assignment) {
-                    true
-                } else {
-                    assignment.un_assign(next);
-                    assignment.assign(!next);
-                    if dpll(formula, assignment) {
-                        true
-                    } else {
-                        assignment.un_assign(next);
-                        false
-                    }
-                }
-            }
-        }
-
-        if dpll(&mut self, &mut assignment) {
-            Some(assignment)
-        } else {
-            None
-        }
-    }
-}
-
-/// An assignment of literals
-/// Each element in the `Vec` corresponds to a literal except for the first
-/// Elements may be None, corresponding to no assignment
-pub struct Assignment {
-    assignment: Vec<Option<bool>>,
-    num_assigned: usize,
-}
+/// The assigned literals
+/// Each spot in the Vec is either a bool determining whether the assigned literal is negated
+/// or None, if neither literal with that id is assigned
+pub struct Assignment(Vec<Option<bool>>);
 
 impl Assignment {
-    fn new(num_vars: usize) -> Self {
-        Assignment {
-            assignment: vec![None; num_vars + 1],
-            num_assigned: 0,
-        }
+    pub fn new(num_vars: usize) -> Self {
+        Assignment(vec![None; num_vars])
     }
-    /// Returns true if the given literal (also respecting negation) is assigned and false otherwise
-    fn is_assigned(&self, lit: Literal) -> bool {
-        Some(lit.negated) == self.assignment[lit.var_id]
-    }
-    /// Returns false if the negation of the given literal is assigned and true otherwise
-    fn is_not_negated(&self, lit: Literal) -> bool {
-        Some(!lit.negated) != self.assignment[lit.var_id]
-    }
-    fn next_literal(&self) -> Literal {
-        Literal {
-            var_id: self.num_assigned + 1,
-            negated: false,
-        }
-    }
+
     fn assign(&mut self, lit: Literal) {
-        self.assignment[lit.var_id] = Some(lit.negated);
-        self.num_assigned += 1;
+        self.0[lit.id] = Some(lit.negated);
     }
+
     fn un_assign(&mut self, lit: Literal) {
-        self.assignment[lit.var_id] = None;
-        self.num_assigned -= 1;
+        self.0[lit.id] = None;
+    }
+
+    fn assigned(&self, lit: Literal) -> bool {
+        self.0[lit.id] == Some(lit.negated)
     }
 }
 
 impl fmt::Display for Assignment {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for (var_id, negated) in self.assignment.iter().enumerate().skip(1) {
+        for (id, negated) in self.0.iter().enumerate() {
             match negated {
-                Some(n) => write!(f, "{}{} ", if *n { "-" } else { "" }, var_id)?,
-                None => write!(f, "{} UNASSIGNED", var_id)?,
+                Some(n) => write!(f, "{}{} ", if *n { "-" } else { "" }, id)?,
+                None => write!(f, "{} UNASSIGNED", id)?,
             }
 
         }
