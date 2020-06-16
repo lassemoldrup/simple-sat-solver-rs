@@ -45,8 +45,8 @@ impl Formula {
         };
 
         let pos = buf.position() as usize;
-        let buf = &buf.into_inner()[pos..];
-        let mut clause_str_iter = buf.trim_end().split(" 0");
+        let clauses = &buf.into_inner()[pos..];
+        let mut clause_str_iter = clauses.trim_end().split(" 0");
 
         for (clause, clause_str) in formula.clauses.iter_mut().zip(&mut clause_str_iter) {
             for v in clause_str.split_whitespace() {
